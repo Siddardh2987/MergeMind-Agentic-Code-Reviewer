@@ -1,0 +1,505 @@
+/**
+ * MergeMind — Content Script Styles
+ *
+ * Styles for the floating review widget injected into GitHub pages.
+ * Uses glassmorphism, dark theme, and smooth animations.
+ *
+ * Design principles:
+ *   - Matches GitHub's dark aesthetic
+ *   - Doesn't interfere with GitHub's existing UI
+ *   - Smooth transitions between states
+ *   - Accessible contrast ratios
+ */
+
+/* ══════════════════════════════════════════════════════════════════════
+   Widget Container — Fixed position, bottom-right corner
+   ══════════════════════════════════════════════════════════════════════ */
+
+.mergemind-widget {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 99999;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+    Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 380px;
+  width: 380px;
+}
+
+/* ── Entrance / Exit Animations ────────────────────────────────────── */
+
+.mergemind-enter {
+  animation: mmSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.mergemind-exit {
+  animation: mmSlideOut 0.3s cubic-bezier(0.55, 0.06, 0.68, 0.19) forwards;
+}
+
+@keyframes mmSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes mmSlideOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Card — The main glassmorphism container
+   ══════════════════════════════════════════════════════════════════════ */
+
+.mm-card {
+  background: rgba(22, 27, 34, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 16px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(139, 148, 158, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  color: #e6edf3;
+}
+
+/* Status-specific top border accent */
+.mm-status--critical {
+  border-top: 3px solid #f85149;
+}
+
+.mm-status--warning {
+  border-top: 3px solid #d29922;
+}
+
+.mm-status--clean {
+  border-top: 3px solid #3fb950;
+}
+
+.mm-card--loading {
+  border-top: 3px solid #58a6ff;
+}
+
+.mm-card--error {
+  border-top: 3px solid #f85149;
+}
+
+.mm-card--timeout {
+  border-top: 3px solid #d29922;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Header — Logo + Close button
+   ══════════════════════════════════════════════════════════════════════ */
+
+.mm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.12);
+}
+
+.mm-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mm-logo-icon {
+  font-size: 18px;
+}
+
+.mm-logo-text {
+  font-weight: 600;
+  font-size: 14px;
+  background: linear-gradient(135deg, #58a6ff, #bc8cff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 0.3px;
+}
+
+.mm-close {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.mm-close:hover {
+  background: rgba(139, 148, 158, 0.15);
+  color: #e6edf3;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Body — Main content area
+   ══════════════════════════════════════════════════════════════════════ */
+
+.mm-body {
+  padding: 16px;
+}
+
+/* ── Loading State ──────────────────────────────────────────────────── */
+
+.mm-loader {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.mm-loader-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.mm-loader-dots span {
+  width: 8px;
+  height: 8px;
+  background: #58a6ff;
+  border-radius: 50%;
+  animation: mmPulse 1.4s ease-in-out infinite;
+}
+
+.mm-loader-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.mm-loader-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes mmPulse {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.mm-loading-text {
+  text-align: center;
+  color: #e6edf3;
+  font-weight: 500;
+  margin: 12px 0 4px;
+  font-size: 14px;
+}
+
+.mm-loading-subtext {
+  text-align: center;
+  color: #8b949e;
+  font-size: 12px;
+  margin: 0;
+}
+
+/* ── Status Banner ─────────────────────────────────────────────────── */
+
+.mm-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.mm-status-emoji {
+  font-size: 18px;
+}
+
+.mm-status-text {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* ── Summary Grid ──────────────────────────────────────────────────── */
+
+.mm-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.mm-summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  background: rgba(139, 148, 158, 0.06);
+  border-radius: 10px;
+  border: 1px solid rgba(139, 148, 158, 0.1);
+  transition: all 0.2s ease;
+}
+
+.mm-summary-item.mm-has-issues {
+  background: rgba(210, 153, 34, 0.08);
+  border-color: rgba(210, 153, 34, 0.2);
+}
+
+.mm-summary-icon {
+  font-size: 16px;
+}
+
+.mm-summary-label {
+  font-size: 11px;
+  color: #8b949e;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mm-summary-count {
+  font-size: 20px;
+  font-weight: 700;
+  color: #e6edf3;
+}
+
+.mm-has-issues .mm-summary-count {
+  color: #d29922;
+}
+
+/* ── Clean Text ────────────────────────────────────────────────────── */
+
+.mm-clean-text {
+  text-align: center;
+  color: #3fb950;
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+/* ── Expand/Collapse Button ────────────────────────────────────────── */
+
+.mm-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.2);
+  border-radius: 8px;
+  color: #58a6ff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.mm-expand-btn:hover {
+  background: rgba(88, 166, 255, 0.14);
+  border-color: rgba(88, 166, 255, 0.35);
+}
+
+.mm-expand-icon {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.mm-expanded .mm-expand-icon {
+  transform: rotate(180deg);
+}
+
+/* ── Details (Expandable Issues List) ──────────────────────────────── */
+
+.mm-details {
+  margin-top: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 148, 158, 0.3) transparent;
+}
+
+.mm-details::-webkit-scrollbar {
+  width: 5px;
+}
+
+.mm-details::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mm-details::-webkit-scrollbar-thumb {
+  background: rgba(139, 148, 158, 0.3);
+  border-radius: 3px;
+}
+
+/* ── Issue Categories ──────────────────────────────────────────────── */
+
+.mm-category {
+  margin-bottom: 12px;
+}
+
+.mm-category:last-child {
+  margin-bottom: 0;
+}
+
+.mm-category-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(139, 148, 158, 0.06);
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8b949e;
+  margin-bottom: 6px;
+}
+
+.mm-category-count {
+  margin-left: auto;
+  background: rgba(139, 148, 158, 0.15);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+/* ── Individual Issues ─────────────────────────────────────────────── */
+
+.mm-issues-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mm-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  transition: background 0.15s ease;
+  border-left: 3px solid transparent;
+}
+
+.mm-issue:hover {
+  background: rgba(139, 148, 158, 0.06);
+}
+
+/* Severity colors for the left border */
+.mm-severity-critical {
+  border-left-color: #f85149;
+}
+
+.mm-severity-warning {
+  border-left-color: #d29922;
+}
+
+.mm-severity-info {
+  border-left-color: #58a6ff;
+}
+
+.mm-issue-severity {
+  flex-shrink: 0;
+  font-size: 12px;
+  margin-top: 1px;
+}
+
+.mm-issue-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.mm-issue-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: #e6edf3;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.mm-issue-desc {
+  font-size: 12px;
+  color: #8b949e;
+  margin: 0;
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+
+/* ── Error & Timeout States ────────────────────────────────────────── */
+
+.mm-error-text,
+.mm-timeout-text {
+  font-weight: 600;
+  font-size: 14px;
+  text-align: center;
+  margin: 0 0 6px;
+}
+
+.mm-error-text {
+  color: #f85149;
+}
+
+.mm-timeout-text {
+  color: #d29922;
+}
+
+.mm-error-detail,
+.mm-timeout-detail {
+  color: #8b949e;
+  font-size: 12px;
+  text-align: center;
+  margin: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Footer — Commit SHA
+   ══════════════════════════════════════════════════════════════════════ */
+
+.mm-footer {
+  padding: 8px 16px;
+  border-top: 1px solid rgba(139, 148, 158, 0.12);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mm-commit-sha {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 11px;
+  color: #8b949e;
+  background: rgba(139, 148, 158, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Responsive — Smaller screens
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 480px) {
+  .mergemind-widget {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
+    width: calc(100vw - 24px);
+  }
+}
