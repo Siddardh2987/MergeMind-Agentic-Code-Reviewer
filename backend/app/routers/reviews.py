@@ -51,7 +51,7 @@ async def get_review_by_commit(
     if not review:
         raise HTTPException(
             status_code=404,
-            detail=f"No review found for commit {commit_sha[:8]}",
+            detail="Error 404: No review found for this repository yet.",
         )
 
     return _build_review_response(review)
@@ -69,7 +69,7 @@ async def mark_review_displayed(
     if not review:
         raise HTTPException(
             status_code=404,
-            detail=f"Review with ID {review_id} not found",
+            detail="Error 404: No review found for this repository yet.",
         )
     review.displayed = True
     db.commit()
@@ -173,7 +173,7 @@ async def get_latest_review_for_repo(
     if not review:
         raise HTTPException(
             status_code=404,
-            detail=f"No reviews found for repository {repo_full_name}",
+            detail="Error 404: No review found for this repository yet.",
         )
 
     return _build_review_response(review)

@@ -23,12 +23,30 @@ function ReviewDetail({ commitSha, backendUrl, onBack }) {
           }
         } else {
           if (active) {
-            setError(`HTTP Error ${res.status}`);
+            let errorMsg = `Unexpected Error (${res.status})`;
+            if (res.status === 400) {
+              errorMsg = "Error 400: Invalid request sent to the backend.";
+            } else if (res.status === 401) {
+              errorMsg = "Error 401: Authentication failed.";
+            } else if (res.status === 403) {
+              errorMsg = "Error 403: Access denied.";
+            } else if (res.status === 404) {
+              errorMsg = "Error 404: No review found for this repository yet.";
+            } else if (res.status === 429) {
+              errorMsg = "Error 429: Rate limit exceeded. Please try again later.";
+            } else if (res.status === 500) {
+              errorMsg = "Error 500: Internal server error.";
+            } else if (res.status === 502) {
+              errorMsg = "Error 502: Upstream service unavailable.";
+            } else if (res.status === 503) {
+              errorMsg = "Error 503: AI model unavailable or under high demand. Please try again in a few minutes.";
+            }
+            setError(errorMsg);
           }
         }
       } catch (err) {
         if (active) {
-          setError(err.message || 'Failed to load details');
+          setError("Unable to connect to the MergeMind backend.");
         }
       } finally {
         if (active) {

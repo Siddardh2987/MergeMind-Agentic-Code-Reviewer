@@ -49,13 +49,13 @@ async def handle_webhook(request: Request, db: Session = Depends(get_db)):
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verify_webhook_signature(raw_body, signature):
         logger.warning("🚫 Webhook signature verification failed")
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        raise HTTPException(status_code=401, detail="Error 401: Authentication failed.")
 
     # ── Step 2: Parse the JSON payload ────────────────────────────────
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        raise HTTPException(status_code=400, detail="Error 400: Invalid request sent to the backend.")
 
     # ── Step 3: Check event type ──────────────────────────────────────
     # We only process push events
@@ -74,12 +74,12 @@ async def handle_webhook(request: Request, db: Session = Depends(get_db)):
     if not head_commit:
         raise HTTPException(
             status_code=400,
-            detail="No head_commit in payload (possible branch deletion)"
+            detail="Error 400: Invalid request sent to the backend."
         )
 
     commit_sha = head_commit.get("id", "")
     if not commit_sha:
-        raise HTTPException(status_code=400, detail="No commit SHA found")
+        raise HTTPException(status_code=400, detail="Error 400: Invalid request sent to the backend.")
 
     # Repository info
     repo_info = payload.get("repository", {})
