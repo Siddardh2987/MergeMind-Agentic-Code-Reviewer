@@ -16,6 +16,7 @@ MergeMind automatically reviews your GitHub commits using multiple specialized A
   - ✨ **Code Quality Agent** — Evaluates readability, maintainability, naming conventions, docstrings, and adherence to clean code principles.
 - **📊 Smart Aggregator** — Synthesizes, de-duplicates, and prioritizes findings from the four specialist agents.
 - **⚙️ Configurable Strictness** — Settings for **Lenient**, **Moderate**, or **Strict** code reviews to adapt to different development phases.
+- **⚡ Real-Time WebSocket Updates** — Replaces traditional polling with WebSocket connections (`/ws/review/{commit_sha}`) to instantly push review status updates (pending ➔ processing ➔ completed) directly to the GitHub page widget.
 - **🧩 Manifest V3 Chrome Extension** — Beautiful floating widget injected directly into GitHub commit/PR pages:
   - Responsive floating review widget with loading animations.
   - Interactive popup to configure backend server URL, review strictness, and see recent commits.
@@ -35,37 +36,142 @@ MergeMind automatically reviews your GitHub commits using multiple specialized A
                                               ▼
                        ┌──────────────────────────────────────────────┐
                        │               FastAPI Backend                │
-                       └──────────────────────┬───────────────────────┘
-                                              │
-                       ┌──────────────────────┴───────────────────────┐
-                       ▼                                              ▼
-         ┌───────────────────────────┐                  ┌───────────────────────────┐
-         │   GitHub API Client       │                  │  SQLAlchemy + SQLite      │
-         │   (Fetch Diff & Context)  │                  │  (Stores history/records) │
-         └─────────────┬─────────────┘                  └───────────────────────────┘
-                       │
-                       ▼
-         ┌──────────────────────────────────────────────────────────────────────────┐
-         │                       Multi-Agent Pipeline (Gemini)                      │
-         │                                                                          │
-         │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐  │
-         │  │🐞 Bug Detect │ │🔒 Security   │ │⚡ Performance│ │✨ Code Quality  │  │
-         │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └────────┬────────┘  │
-         │         │                │                │                  │           │
-         │         └────────────────┼────────────────┼──────────────────┘           │
-         │                          ▼                                               │
-         │                   ┌──────────────┐                                       │
-         │                   │ Aggregator   │                                       │
-         │                   └──────┬───────┘                                       │
-         └──────────────────────────┼───────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                       ┌───────────────────────────┐
-                       │   Chrome Extension (MV3)  │
-                       │   - Content Script UI     │
-                       │   - React/Vite Popup UI   │
-                       └───────────────────────────┘
+                       └──────────────┬──────────────┬────────────────┘
+                                      │              │
+               ┌──────────────────────┘              └──────────────────────┐
+               │                                                            │
+               ▼                                                            ▼
+ ┌───────────────────────────┐                                ┌───────────────────────────┐
+ │   GitHub API Client       │                                │  SQLAlchemy + SQLite      │
+ │   (Fetch Diff & Context)  │                                │  (Stores history/records) │
+ └─────────────┬─────────────┘                                └───────────────────────────┘
+               │
+               ▼
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │                       Multi-Agent Pipeline (Gemini)                      │
+ │                                                                          │
+ │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐  │
+ │  │🐞 Bug Detect │ │🔒 Security   │ │⚡ Performance│ │✨ Code Quality  │  │
+ │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └────────┬────────┘  │
+ │         │                │                │                  │           │
+ │         └────────────────┼────────────────┼──────────────────┘           │
+ │                          ▼                                               │
+ │                   ┌──────────────┐                                       │
+ │                   │ Aggregator   │                                       │
+ │                   └──────┬───────┘                                       │
+ └──────────────────────────┼───────────────────────────────────────────────┘
+                            │
+                            ▼
+               ┌───────────────────────────┐
+               │    WebSocket Broadcaster  │
+               └────────────┬──────────────┘
+                            │ (Real-time events)
+                            ▼
+               ┌───────────────────────────┐
+               │   Chrome Extension (MV3)  │
+               │   - Injected Widget UI    │
+               │   - React/Vite Popup UI   │
+               └───────────────────────────┘
 ```
+
+---
+
+## 🔄 Backend Pipeline Flow
+
+This diagram illustrates the step-by-step logic executed by the FastAPI backend when reviewing a commit:
+
+```
+                      ┌────────────────────────────────────────┐
+                      │          GitHub Push Webhook           │
+                      └───────────────────┬────────────────────┘
+                                          │ POST /webhook
+                                          ▼
+                      ┌────────────────────────────────────────┐
+                      │          FastAPI Webhook Route         │
+                      │   - Validates webhook secret signature │
+                      │   - Creates a 'pending' Review in DB   │
+                      │   - Broadcasts 'pending' via WebSockets│
+                      └───────────────────┬────────────────────┘
+                                          │ Launches Async Task
+                                          ▼
+                      ┌────────────────────────────────────────┐
+                      │    Async Review Pipeline Task (BG)     │
+                      │   - Updates database status to 'active'│
+                      │   - Broadcasts 'active' via WebSockets  │
+                      └───────────────────┬────────────────────┘
+                                          │
+                   ┌──────────────────────┴──────────────────────┐
+                   │                                             │
+                   ▼                                             ▼
+     ┌───────────────────────────┐                 ┌───────────────────────────┐
+     │    Fetch Commit Diff      │                 │   Fetch Settings          │
+     │    from GitHub API        │                 │   for Committer           │
+     └─────────────┬─────────────┘                 │   (Lenient/Moderate/Strict)   │
+                   │                               └─────────────┬─────────────┘
+                   ▼                                             │
+     ┌───────────────────────────┐                               │
+     │    Parse Diff             │                               │
+     │    Identify modified lines│                               │
+     └─────────────┬─────────────┘                               │
+                   │                                             │
+                   ▼                                             │
+     ┌───────────────────────────┐                               │
+     │    Fetch File Content     │                               │
+     │    Fetch full source files│                               │
+     └─────────────┬─────────────┘                               │
+                   │                                             │
+                   ▼                                             │
+     ┌───────────────────────────┐                               │
+     │    Build Context          │                               │
+     │    Extract functions, AST │                               │
+     │    surrounding diff lines │                               │
+     └─────────────┬─────────────┘                               │
+                   │                                             │
+                   └──────────────────────┬──────────────────────┘
+                                          │
+                                          ▼
+                      ┌────────────────────────────────────────┐
+                      │      Parallel Multi-Agent Stage        │
+                      │  (Requests concurrent Gemini LLM runs) │
+                      │                                        │
+                      │  ┌──────────────┐    ┌──────────────┐  │
+                      │  │ 🐞 Bug Agent │    │ 🔒 Sec Agent │  │
+                      │  └──────┬───────┘    └──────┬───────┘  │
+                      │         │                   │          │
+                      │  ┌──────┴───────┐    ┌──────┴───────┐  │
+                      │  │ ⚡ Perf Agent │    │ ✨ Quality Ag │  │
+                      │  └──────┬───────┘    └──────┬───────┘  │
+                      │         │                   │          │
+                      │         └─────────┬─────────┘          │
+                      │                   ▼                    │
+                      │             Findings List              │
+                      └───────────────────┬────────────────────┘
+                                          │
+                                          ▼
+                      ┌────────────────────────────────────────┐
+                      │          Aggregator Agent              │
+                      │   - De-duplicates overlaps/redundancies│
+                      │   - Synthesizes summary metrics        │
+                      │   - Formats final JSON payload         │
+                      └───────────────────┬────────────────────┘
+                                          │
+                                          ▼
+                      ┌────────────────────────────────────────┐
+                      │          Completion & Broadcast        │
+                      │   - Saves summary/issues JSON to SQLite│
+                      │   - Updates status to 'completed'      │
+                      │   - Pushes final payload to WebSocket  │
+                      │     subscribers in real-time           │
+                      └────────────────────────────────────────┘
+```
+
+### Flow Breakdown:
+1. **Ingestion & Validation**: The webhook router validates GitHub signature headers for security. If valid, a new review record is initialized as `pending`, and the review pipeline runs asynchronously in the background so GitHub receives a `200 OK` response instantly.
+2. **Context Enrichment**: The review service parses the diff, fetches full file content around changes, and packages it into enriched context (including parent/surrounding methods and imports) rather than raw, isolated diff segments.
+3. **Strictness Check**: Committer strictness settings (Lenient, Moderate, Strict) are pulled from SQLite database to customize review criteria.
+4. **Specialist Agents execution**: Concurrently triggers Bug Detection, Security, Performance, and Code Quality agents to critique the code base based on strictness.
+5. **Aggregation & Deduplication**: The Aggregator agent cleans, de-duplicates, and prioritizes findings from the specialists.
+6. **Real-time Push**: Results are committed to the database, status changes to `completed`, and the final review payload is broadcast to connected WebSockets to render instantly in the Chrome extension.
 
 ---
 
@@ -160,16 +266,27 @@ npm run build
 
 ## 📡 API Endpoints
 
+### HTTP Endpoints
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/webhook` | Receives GitHub push webhook payloads |
+| `POST` | `/review` | Manually requests a review for a commit |
 | `GET` | `/review/{commit_sha}` | Retrieves review findings for a specific commit |
+| `POST` | `/review/{review_id}/displayed` | Marks a review as displayed in UI |
 | `GET` | `/reviews/{username}` | Retrieves recent reviews filtered by GitHub username |
 | `GET` | `/review/repo/{owner}/{repo}/latest` | Fetches the latest review for a repository |
 | `GET` | `/settings/{github_username}` | Retrieves strictness settings for a developer |
 | `POST` | `/settings/{github_username}` | Saves strictness configurations |
 | `GET` | `/health` | Server health check status |
 | `GET` | `/docs` | Swagger interactive API docs |
+
+### WebSocket Endpoints
+
+| Protocol | Endpoint | Description |
+|----------|----------|-------------|
+| `WS` | `/ws/review/{commit_sha}` | Real-time subscription to review updates for a specific commit |
+| `WS` | `/ws/repo/{owner}/{repo}` | Real-time subscription to all reviews for a repository |
 
 ---
 

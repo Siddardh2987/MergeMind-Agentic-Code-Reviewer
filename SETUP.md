@@ -19,6 +19,7 @@ MergeMind is an AI-powered code review system that automatically analyzes GitHub
 GitHub Push Event
     → GitHub Webhook (POST /webhook)
     → FastAPI Backend receives payload
+    → Creates pending review in DB & broadcasts it via WebSockets
     → Fetches commit diff + full file context from GitHub API
     → Runs 4 AI agents in parallel:
         ├── 🐞 Bug Detection Agent
@@ -27,8 +28,9 @@ GitHub Push Event
         └── ✨ Code Quality Agent
     → Aggregator combines & deduplicates results
     → Stores final review in SQLite
-    → Chrome Extension polls /review/{commit_sha}
-    → Displays floating widget on GitHub page
+    → Broadcasts completed review details via WebSocket to connected subscribers
+    → Chrome Extension receives real-time payload via /ws/review/{commit_sha}
+    → Injected floating widget updates on GitHub page instantly
 ```
 
 ---
@@ -445,10 +447,9 @@ curl http://localhost:8000/reviews/USERNAME
 
 1. **PR Review Support** — Extend to review pull requests, not just individual commits.
 2. **GitHub Comments** — Post review results as GitHub commit comments automatically.
-3. **Custom Rules** — Let users configure which checks to enable/disable per repo.
-4. **Team Dashboard** — Web dashboard showing review trends across a team.
-5. **WebSocket Updates** — Replace polling with WebSockets for real-time status updates.
-6. **Multi-LLM Support** — Add support for Claude, OpenAI, or local models (Ollama).
+5. **Custom Rules** — Let users configure which checks to enable/disable per repo.
+6. **Team Dashboard** — Web dashboard showing review trends across a team.
+7. **Multi-LLM Support** — Add support for Claude, OpenAI, or local models (Ollama).
 
 ---
 
@@ -456,7 +457,7 @@ curl http://localhost:8000/reviews/USERNAME
 
 ```
 MergeMind/
-├── backend/
+├── backend/                        # FastAPI Application
 │   ├── app/
 │   │   ├── __init__.py
 │   │   ├── main.py                 # FastAPI entry point
@@ -466,10 +467,13 @@ MergeMind/
 │   │   ├── schemas.py              # Pydantic schemas
 │   │   ├── routers/
 │   │   │   ├── webhook.py          # POST /webhook
-│   │   │   └── reviews.py          # GET /review, /reviews
+│   │   │   ├── reviews.py          # HTTP endpoints for reviews
+│   │   │   ├── settings.py         # HTTP endpoints for developer strictness settings
+│   │   │   └── ws.py               # WebSocket endpoints for real-time updates
 │   │   ├── services/
 │   │   │   ├── github_service.py   # GitHub API interactions
-│   │   │   └── review_service.py   # Review pipeline
+│   │   │   ├── review_service.py   # Review orchestration pipeline
+│   │   │   └── ws_manager.py       # WebSocket client connection manager
 │   │   ├── agents/
 │   │   │   ├── base_agent.py       # Base agent class
 │   │   │   ├── code_quality.py     # Code Quality Agent
@@ -480,25 +484,30 @@ MergeMind/
 │   │   └── utils/
 │   │       ├── context_builder.py  # Enriched context builder
 │   │       └── diff_parser.py      # Unified diff parser
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── .env                        # Your local config (not committed)
-├── extension/
-│   ├── manifest.json               # Chrome extension manifest v3
-│   ├── config.js                   # Backend URL config
-│   ├── background/
-│   │   └── background.js           # Service worker
-│   ├── content/
-│   │   ├── content.js              # GitHub page injection
-│   │   └── content.css             # Widget styling
-│   ├── popup/
-│   │   ├── popup.html              # Toolbar popup
-│   │   ├── popup.css               # Popup styling
-│   │   └── popup.js                # Popup logic
-│   └── icons/
-│       ├── icon16.png
-│       ├── icon48.png
-│       └── icon128.png
+│   ├── requirements.txt            # Python dependencies
+│   ├── .env.example                # Example configuration template
+│   └── .env                        # Local credentials (gitignored)
+│
+├── extension/                      # Chrome Extension (Manifest V3)
+│   ├── src/                        # React UI Components (Vite App)
+│   │   ├── components/             # UI Components (ReviewList, Settings, etc.)
+│   │   ├── App.jsx                 # Popup Main Application
+│   │   ├── main.jsx                # Popup entry point
+│   │   └── index.css               # Popup premium UI styles
+│   ├── content/                    # Injected scripts and styles for GitHub pages
+│   │   ├── content.js              # Injector script & WebSockets connection
+│   │   └── content.css             # Floating widget stylesheet
+│   ├── background/                 # Extension background processes
+│   │   └── background.js           # Chrome runtime event broker
+│   ├── popup/                      # Built Vite output directory
+│   │   ├── index.html              # Built popup template
+│   │   ├── popup.css               # Bundled popup CSS
+│   │   └── popup.js                # Bundled popup JS
+│   ├── icons/                      # Extension icons
+│   ├── manifest.json               # Extension configuration manifest
+│   ├── package.json                # Node package script manager
+│   └── vite.config.js              # Vite packaging & build configuration
+│
 ├── SETUP.md                        # This file
-└── README.md
+└── README.md                       # High-level overview & backend flow
 ```
