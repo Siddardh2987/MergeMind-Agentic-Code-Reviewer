@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # ── Server Configuration ──────────────────────────────────────────
     # Backend URL (used for CORS and documentation)
-    BACKEND_URL: str = "http://localhost:8000"
+    BACKEND_URL: str = "https://mergemind-agentic-code-reviewer.onrender.com"
 
     # Allowed CORS origins (comma-separated) — Chrome extension needs this
     CORS_ORIGINS: str = "chrome-extension://*,http://localhost:3000"

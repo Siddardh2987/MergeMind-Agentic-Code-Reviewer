@@ -51,23 +51,23 @@ cors_origins = [
     if origin.strip()
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins + [
-        "https://github.com",
-        "http://localhost:*",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 # app.add_middleware(
 #     CORSMiddleware,
-#     allow_origin_regex=r"chrome-extension://.*",
+#     allow_origins=cors_origins + [
+#         "https://github.com",
+#         "http://localhost:*",
+#     ],
 #     allow_credentials=True,
 #     allow_methods=["*"],
 #     allow_headers=["*"],
 # )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"chrome-extension://.*",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Include Routers ──────────────────────────────────────────────────
 # Mount the webhook and reviews routers
