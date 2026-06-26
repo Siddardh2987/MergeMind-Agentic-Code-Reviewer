@@ -45,24 +45,19 @@ app = FastAPI(
 # ── CORS Middleware ───────────────────────────────────────────────────
 # The Chrome extension needs to make cross-origin requests to this API.
 # We also allow GitHub and localhost origins for development.
+# We filter out any 'chrome-extension://*' wildcards from CORS_ORIGINS
+# and handle them safely with allow_origin_regex.
 cors_origins = [
     origin.strip()
     for origin in settings.CORS_ORIGINS.split(",")
-    if origin.strip()
+    if origin.strip() and not origin.strip().startswith("chrome-extension://")
 ]
 
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=cors_origins + [
-#         "https://github.com",
-#         "http://localhost:*",
-#     ],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=cors_origins + [
+        "https://github.com",
+    ],
     allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=True,
     allow_methods=["*"],
