@@ -26,8 +26,44 @@ from app.agents.bug_detection import BugDetectionAgent
 from app.agents.security import SecurityAgent
 from app.agents.performance import PerformanceAgent
 from app.agents.aggregator import AggregatorAgent
+from app.services.ws_manager import manager as ws_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _build_ws_payload(review: Review) -> dict:
+    """
+    Build a JSON-serializable dict from a Review ORM object
+    for broadcasting over WebSocket.
+    """
+    summary = None
+    if review.summary_json:
+        try:
+            summary = json.loads(review.summary_json)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    issues = []
+    if review.issues_json:
+        try:
+            issues = json.loads(review.issues_json)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    return {
+        "id": review.id,
+        "github_username": review.github_username,
+        "github_user_id": review.github_user_id,
+        "repository": review.repository,
+        "commit_sha": review.commit_sha,
+        "status": review.status,
+        "summary": summary,
+        "issues": issues,
+        "error_message": review.error_message,
+        "displayed": review.displayed,
+        "created_at": review.created_at.isoformat() if review.created_at else None,
+        "completed_at": review.completed_at.isoformat() if review.completed_at else None,
+    }
 
 
 async def run_review_pipeline(
@@ -70,6 +106,10 @@ async def run_review_pipeline(
         db.commit()
         logger.info(f"🚀 Starting review pipeline for {repo_full_name}@{commit_sha[:8]}")
 
+        # Notify WebSocket clients of processing status
+        await ws_manager.notify_commit(commit_sha, _build_ws_payload(review))
+        await ws_manager.notify_repo(repo_full_name, _build_ws_payload(review))
+
         # ── Step 1b: Read user strictness preference ──────────────────
         user_settings = (
             db.query(UserSettings)
@@ -82,14 +122,14 @@ async def run_review_pipeline(
         # ── Step 2: Fetch the commit diff ─────────────────────────────
         raw_diff = await fetch_commit_diff(repo_full_name, commit_sha)
         if not raw_diff:
-            _mark_failed(review, db, "Failed to fetch commit diff from GitHub")
+            await _mark_failed(review, db, "Failed to fetch commit diff from GitHub")
             return
 
         # ── Step 3: Parse the diff ────────────────────────────────────
         file_diffs = parse_diff(raw_diff)
         if not file_diffs:
             # No parseable file changes (might be binary-only or merge commits)
-            _mark_completed_empty(review, db)
+            await _mark_completed_empty(review, db)
             return
 
         logger.info(f"📂 Found changes in {len(file_diffs)} file(s)")
@@ -111,7 +151,7 @@ async def run_review_pipeline(
 
         # Guard: if context is too short, skip review
         if len(formatted_context) < 50:
-            _mark_completed_empty(review, db)
+            await _mark_completed_empty(review, db)
             return
 
         # ── Step 6: Run all agents in parallel ────────────────────────
@@ -176,26 +216,83 @@ async def run_review_pipeline(
             f"{total_issues} issue(s) found"
         )
 
+        # Notify WebSocket clients of completion
+        await ws_manager.notify_commit(commit_sha, _build_ws_payload(review))
+        await ws_manager.notify_repo(repo_full_name, _build_ws_payload(review))
+
     except Exception as e:
         logger.exception(f"❌ Review pipeline failed: {str(e)}")
         try:
             review = db.query(Review).filter(Review.id == review_id).first()
             if review:
-                _mark_failed(review, db, str(e))
+                await _mark_failed(review, db, str(e))
         except Exception:
             logger.exception("❌ Failed to update review status after error")
 
 
-def _mark_failed(review: Review, db: Session, error_msg: str) -> None:
+async def _mark_failed(review: Review, db: Session, error_msg: str) -> None:
     """Helper to mark a review as failed with an error message."""
     review.status = "failed"
-    review.error_message = error_msg
+    review.error_message = _format_error_message(error_msg)
     review.completed_at = datetime.now(timezone.utc)
     db.commit()
-    logger.error(f"❌ Review {review.id} marked as failed: {error_msg}")
+    logger.error(f"❌ Review {review.id} marked as failed: {review.error_message}")
+
+    # Notify WebSocket clients of failure
+    await ws_manager.notify_commit(review.commit_sha, _build_ws_payload(review))
+    await ws_manager.notify_repo(review.repository, _build_ws_payload(review))
 
 
-def _mark_completed_empty(review: Review, db: Session) -> None:
+def _format_error_message(raw_error: str) -> str:
+    """
+    Convert a raw exception message into a clean, user-facing error string.
+
+    Format: "Error <code>: <SOURCE> <DESCRIPTION>"
+
+    Categories:
+      - AI errors (rate limits, quota exhaustion, model failures)
+      - GitHub errors (auth failures, API errors, diff fetch failures)
+      - Internal errors (everything else)
+    """
+    err_lower = raw_error.lower()
+
+    # ── AI / Gemini related errors ────────────────────────────────────
+    if "429" in raw_error or "resource_exhausted" in err_lower or "resource exhausted" in err_lower:
+        return "Error 429: AI RESOURCE EXHAUSTED. Please wait a moment and try again."
+    elif "quota" in err_lower or "rate limit" in err_lower or "rate_limit" in err_lower:
+        return "Error 429: AI RATE LIMIT EXCEEDED. Please try again later."
+    elif "503" in raw_error and ("genai" in err_lower or "gemini" in err_lower or "model" in err_lower):
+        return "Error 503: AI SERVICE UNAVAILABLE. The AI model is temporarily down."
+    elif "gemini" in err_lower or "genai" in err_lower or "google.genai" in err_lower:
+        return "Error 500: AI ANALYSIS FAILED. The AI model returned an unexpected error."
+    elif "specialist agent" in err_lower:
+        # Agents failed — check if it's an AI sub-error
+        if "429" in raw_error or "resource_exhausted" in err_lower or "resource exhausted" in err_lower:
+            return "Error 429: AI RESOURCE EXHAUSTED. Please wait a moment and try again."
+        else:
+            return "Error 500: AI ANALYSIS FAILED. One or more review agents encountered an error."
+
+    # ── GitHub related errors ─────────────────────────────────────────
+    elif "401" in raw_error and ("github" in err_lower or "unauthorized" in err_lower):
+        return "Error 401: GITHUB UNAUTHORIZED. Check your GitHub token configuration."
+    elif "403" in raw_error and ("github" in err_lower or "forbidden" in err_lower):
+        return "Error 403: GITHUB FORBIDDEN. Your token may lack the required permissions."
+    elif "404" in raw_error and "github" in err_lower:
+        return "Error 404: GITHUB REPOSITORY NOT FOUND. Check that the repo exists and is accessible."
+    elif "failed to fetch commit diff" in err_lower:
+        return "Error 502: GITHUB DIFF FETCH FAILED. Could not retrieve the commit diff from GitHub."
+    elif "github" in err_lower and ("token" in err_lower or "auth" in err_lower):
+        return "Error 401: GITHUB AUTHENTICATION FAILED. Your GitHub token is invalid or expired."
+    elif "github" in err_lower:
+        return "Error 502: GITHUB API ERROR. Failed to communicate with the GitHub API."
+
+    # ── Fallback ──────────────────────────────────────────────────────
+    else:
+        return "Error 500: INTERNAL SERVER ERROR. An unexpected error occurred during the review."
+
+
+
+async def _mark_completed_empty(review: Review, db: Session) -> None:
     """Helper to mark a review as completed with no issues found."""
     review.status = "completed"
     review.summary_json = json.dumps({
@@ -205,3 +302,7 @@ def _mark_completed_empty(review: Review, db: Session) -> None:
     review.completed_at = datetime.now(timezone.utc)
     db.commit()
     logger.info(f"✅ Review {review.id} completed (no reviewable changes)")
+
+    # Notify WebSocket clients of completion
+    await ws_manager.notify_commit(review.commit_sha, _build_ws_payload(review))
+    await ws_manager.notify_repo(review.repository, _build_ws_payload(review))

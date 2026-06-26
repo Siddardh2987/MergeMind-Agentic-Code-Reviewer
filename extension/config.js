@@ -11,12 +11,12 @@ const MERGEMIND_CONFIG = {
   // Update this after deploying to Render/Railway/etc.
   BACKEND_URL: "http://localhost:8000",
 
-  // ── Polling Configuration ────────────────────────────────────────
-  // How often to poll for review status (in milliseconds)
-  POLL_INTERVAL: 5000, // 5 seconds
+  // ── WebSocket Configuration ─────────────────────────────────────
+  // Initial delay before reconnecting after a WebSocket drop (ms)
+  WS_RECONNECT_DELAY: 1000, // 1 second (doubles each retry via exponential backoff)
 
-  // Maximum number of poll attempts before giving up
-  MAX_POLL_ATTEMPTS: 60, // 60 × 5s = 5 minutes max wait
+  // Maximum number of reconnection attempts before giving up
+  WS_MAX_RECONNECT_ATTEMPTS: 10,
 
   // ── UI Configuration ─────────────────────────────────────────────
   // How long to show the notification widget before auto-minimizing (ms)

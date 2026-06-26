@@ -3,7 +3,7 @@
  *
  * Injected into GitHub pages to:
  *   • Detect the current repository and commit context
- *   • Poll the backend for review status
+ *   • Open WebSocket connections to receive real-time review updates
  *   • Inject a floating review widget (bottom-right corner)
  *   • Display loading → summary → expandable details
  *
@@ -18,12 +18,18 @@ let currentState = {
   repo: null,          // "owner/repo"
   commitSha: null,     // Current commit SHA
   reviewData: null,    // Latest review response from API
-  pollTimer: null,     // Interval ID for polling
-  pollAttempts: 0,     // Number of poll attempts made
   widgetVisible: false, // Whether the widget is currently shown
   widgetClosed: false,  // True when the user manually closed the widget (prevents re-show)
   lastWidgetState: null, // Last rendered state (prevents unnecessary re-renders)
 };
+
+// Active WebSocket connections
+let commitWs = null;      // WebSocket for commit-level updates
+let repoWs = null;        // WebSocket for repo-level updates
+let commitWsRetries = 0;  // Reconnect attempt counter for commit WS
+let repoWsRetries = 0;    // Reconnect attempt counter for repo WS
+let commitWsTimer = null;  // Reconnect timer for commit WS
+let repoWsTimer = null;    // Reconnect timer for repo WS
 
 // ══════════════════════════════════════════════════════════════════════
 // GitHub Context Detection
@@ -74,7 +80,7 @@ function detectGitHubContext() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// API Communication
+// API Communication (kept for initial fetches / popup support)
 // ══════════════════════════════════════════════════════════════════════
 
 /**
@@ -93,7 +99,16 @@ async function getBackendUrl() {
 }
 
 /**
- * Fetch review data from the MergeMind backend.
+ * Convert an HTTP(S) URL to its WebSocket equivalent.
+ *   http://localhost:8000  → ws://localhost:8000
+ *   https://api.example.com → wss://api.example.com
+ */
+function toWsUrl(httpUrl) {
+  return httpUrl.replace(/^http/, "ws");
+}
+
+/**
+ * Fetch review data from the MergeMind backend (HTTP).
  *
  * @param {string} commitSha - The commit SHA to look up
  * @returns {Object|null} Review data or null if not found
@@ -121,9 +136,7 @@ async function fetchReview(commitSha) {
 }
 
 /**
- * Fetch the latest review for a repository.
- *
- * Used when the user is on a repo page (not a specific commit).
+ * Fetch the latest review for a repository (HTTP).
  *
  * @param {string} repoFullName - "owner/repo"
  * @returns {Object|null} Review data or null
@@ -145,48 +158,102 @@ async function fetchLatestReview(repoFullName) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Polling Logic
+// WebSocket Connections (replaces polling)
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Start polling the backend for review status.
+ * Open a WebSocket connection to receive real-time updates
+ * for a specific commit's review.
  *
- * Polls every POLL_INTERVAL ms until:
- *   - Review status becomes 'completed' or 'failed'
- *   - MAX_POLL_ATTEMPTS is reached
- *   - The page navigates away
+ * The server sends the current review state immediately on connect,
+ * then pushes updates whenever the status changes.
+ *
+ * @param {string} commitSha - The commit SHA to subscribe to
  */
-function startPolling(commitSha) {
-  stopPolling();
+async function connectCommitWebSocket(commitSha) {
+  disconnectCommitWebSocket();
 
-  currentState.pollAttempts = 0;
   currentState.commitSha = commitSha;
+  commitWsRetries = 0;
 
   showWidget("loading");
-  pollOnce(commitSha);
-
-  currentState.pollTimer = setInterval(() => {
-    currentState.pollAttempts++;
-
-    if (currentState.pollAttempts >= MERGEMIND_CONFIG.MAX_POLL_ATTEMPTS) {
-      stopPolling();
-      showWidget("timeout");
-      return;
-    }
-
-    pollOnce(commitSha);
-  }, MERGEMIND_CONFIG.POLL_INTERVAL);
+  await _openCommitWs(commitSha);
 }
 
-async function pollOnce(commitSha) {
-  const review = await fetchReview(commitSha);
+async function _openCommitWs(commitSha) {
+  const backendUrl = await getBackendUrl();
+  const wsUrl = `${toWsUrl(backendUrl)}/ws/review/${commitSha}`;
 
-  if (!review) {
+  try {
+    commitWs = new WebSocket(wsUrl);
+  } catch (e) {
+    console.error("MergeMind: Failed to create commit WebSocket:", e);
+    _scheduleCommitReconnect(commitSha);
+    return;
+  }
+
+  commitWs.onopen = () => {
+    console.log(`MergeMind: Commit WS connected for ${commitSha.substring(0, 8)}`);
+    commitWsRetries = 0; // Reset retries on successful connect
+  };
+
+  commitWs.onmessage = (event) => {
+    if (event.data === "pong") return; // Keep-alive response
+
+    try {
+      const review = JSON.parse(event.data);
+      _handleCommitUpdate(review);
+    } catch (e) {
+      console.error("MergeMind: Failed to parse WS message:", e);
+    }
+  };
+
+  commitWs.onclose = (event) => {
+    console.log(`MergeMind: Commit WS closed (code: ${event.code})`);
+    commitWs = null;
+    // Only reconnect if we haven't already received a terminal state
+    if (!_isTerminalState(currentState.reviewData)) {
+      _scheduleCommitReconnect(commitSha);
+    }
+  };
+
+  commitWs.onerror = (error) => {
+    console.error("MergeMind: Commit WS error:", error);
+    // onclose will fire after onerror, which handles reconnection
+  };
+}
+
+/**
+ * Handle an incoming review status update from the commit WebSocket.
+ */
+async function _handleCommitUpdate(review) {
+  if (review.status === "not_found") {
+    // No review exists yet — trigger one automatically!
+    try {
+      const backendUrl = await getBackendUrl();
+      const response = await fetch(`${backendUrl}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          commit_sha: currentState.commitSha,
+          repository: currentState.repo,
+          github_username: currentState.repo.split("/")[0] || "unknown"
+        })
+      });
+      if (!response.ok) {
+        console.error("MergeMind: Failed to trigger review:", response.statusText);
+        showWidget("error", "Failed to trigger review on backend");
+      }
+    } catch (err) {
+      console.error("MergeMind: Failed to trigger review:", err);
+      showWidget("error", "Connection error trying to trigger review");
+    }
     return;
   }
 
   currentState.reviewData = review;
 
+  // Notify the background script for badge updates
   chrome.runtime.sendMessage({
     type: "REVIEW_STATUS_UPDATE",
     status: review.status,
@@ -202,25 +269,179 @@ async function pollOnce(commitSha) {
       showWidget("loading");
       break;
     case "completed":
-      stopPolling();
+      disconnectCommitWebSocket(); // No more updates needed
       showWidget("completed");
       break;
     case "failed":
-      stopPolling();
+      disconnectCommitWebSocket(); // No more updates needed
       showWidget("error", review.error_message);
       break;
   }
 }
 
+/**
+ * Schedule a reconnection attempt for the commit WebSocket
+ * with exponential backoff.
+ */
+function _scheduleCommitReconnect(commitSha) {
+  if (commitWsRetries >= MERGEMIND_CONFIG.WS_MAX_RECONNECT_ATTEMPTS) {
+    console.log("MergeMind: Max commit WS reconnect attempts reached");
+    showWidget("timeout");
+    return;
+  }
+
+  const delay = MERGEMIND_CONFIG.WS_RECONNECT_DELAY * Math.pow(2, commitWsRetries);
+  commitWsRetries++;
+
+  console.log(`MergeMind: Reconnecting commit WS in ${delay}ms (attempt ${commitWsRetries})`);
+  commitWsTimer = setTimeout(() => _openCommitWs(commitSha), delay);
+}
 
 /**
- * Stop the polling timer.
+ * Close the commit-level WebSocket connection.
  */
-function stopPolling() {
-  if (currentState.pollTimer) {
-    clearInterval(currentState.pollTimer);
-    currentState.pollTimer = null;
+function disconnectCommitWebSocket() {
+  if (commitWsTimer) {
+    clearTimeout(commitWsTimer);
+    commitWsTimer = null;
   }
+  if (commitWs) {
+    commitWs.onclose = null; // Prevent reconnect on intentional close
+    commitWs.close();
+    commitWs = null;
+  }
+}
+
+/**
+ * Open a WebSocket connection to receive real-time updates
+ * for all reviews in a repository.
+ *
+ * The server sends the latest review state on connect,
+ * then pushes updates whenever a new review is created or status changes.
+ *
+ * @param {string} repoFullName - "owner/repo"
+ */
+async function connectRepoWebSocket(repoFullName) {
+  disconnectRepoWebSocket();
+  repoWsRetries = 0;
+
+  await _openRepoWs(repoFullName);
+}
+
+async function _openRepoWs(repoFullName) {
+  const backendUrl = await getBackendUrl();
+  const wsUrl = `${toWsUrl(backendUrl)}/ws/repo/${repoFullName}`;
+
+  try {
+    repoWs = new WebSocket(wsUrl);
+  } catch (e) {
+    console.error("MergeMind: Failed to create repo WebSocket:", e);
+    _scheduleRepoReconnect(repoFullName);
+    return;
+  }
+
+  repoWs.onopen = () => {
+    console.log(`MergeMind: Repo WS connected for ${repoFullName}`);
+    repoWsRetries = 0;
+  };
+
+  repoWs.onmessage = (event) => {
+    if (event.data === "pong") return;
+
+    try {
+      const review = JSON.parse(event.data);
+      _handleRepoUpdate(review, repoFullName);
+    } catch (e) {
+      console.error("MergeMind: Failed to parse repo WS message:", e);
+    }
+  };
+
+  repoWs.onclose = (event) => {
+    console.log(`MergeMind: Repo WS closed (code: ${event.code})`);
+    repoWs = null;
+    _scheduleRepoReconnect(repoFullName);
+  };
+
+  repoWs.onerror = (error) => {
+    console.error("MergeMind: Repo WS error:", error);
+  };
+}
+
+/**
+ * Handle an incoming review update from the repo WebSocket.
+ *
+ * Detects new commits and opens a commit-level WS if needed.
+ */
+function _handleRepoUpdate(review, repoFullName) {
+  if (review.status === "not_found") return;
+
+  // If we already have a commit WS active, skip — the commit WS handles it
+  if (commitWs) return;
+
+  const isNewCommit = review.commit_sha !== currentState.commitSha;
+  if (isNewCommit) {
+    currentState.repo = repoFullName;
+    currentState.commitSha = review.commit_sha;
+    currentState.reviewData = review;
+    // Reset manual close state so the new review is shown to the user!
+    currentState.widgetClosed = false;
+    currentState.lastWidgetState = null;
+
+    if (review.status === "pending" || review.status === "processing") {
+      connectCommitWebSocket(review.commit_sha);
+    } else if (review.status === "completed") {
+      showWidget("completed");
+    } else if (review.status === "failed") {
+      showWidget("error", review.error_message);
+    }
+  }
+}
+
+/**
+ * Schedule a reconnection attempt for the repo WebSocket
+ * with exponential backoff.
+ */
+function _scheduleRepoReconnect(repoFullName) {
+  if (repoWsRetries >= MERGEMIND_CONFIG.WS_MAX_RECONNECT_ATTEMPTS) {
+    console.log("MergeMind: Max repo WS reconnect attempts reached");
+    return; // Silently stop — the repo WS is a background listener
+  }
+
+  const delay = MERGEMIND_CONFIG.WS_RECONNECT_DELAY * Math.pow(2, repoWsRetries);
+  repoWsRetries++;
+
+  console.log(`MergeMind: Reconnecting repo WS in ${delay}ms (attempt ${repoWsRetries})`);
+  repoWsTimer = setTimeout(() => _openRepoWs(repoFullName), delay);
+}
+
+/**
+ * Close the repo-level WebSocket connection.
+ */
+function disconnectRepoWebSocket() {
+  if (repoWsTimer) {
+    clearTimeout(repoWsTimer);
+    repoWsTimer = null;
+  }
+  if (repoWs) {
+    repoWs.onclose = null; // Prevent reconnect on intentional close
+    repoWs.close();
+    repoWs = null;
+  }
+}
+
+/**
+ * Close all WebSocket connections and clear timers.
+ */
+function disconnectAllWebSockets() {
+  disconnectCommitWebSocket();
+  disconnectRepoWebSocket();
+}
+
+/**
+ * Check if a review is in a terminal state (no more updates expected).
+ */
+function _isTerminalState(review) {
+  return review && (review.status === "completed" || review.status === "failed");
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -249,7 +470,7 @@ function getOrCreateWidget() {
  * Remove the widget from the page.
  */
 function removeWidget() {
-  stopPolling();
+  disconnectCommitWebSocket();
   currentState.widgetVisible = false;
   currentState.widgetClosed = true;
   currentState.lastWidgetState = null;
@@ -271,7 +492,7 @@ function showWidget(state, errorMsg = "") {
   if (currentState.widgetClosed) return;
 
   // Skip re-render if the widget is already showing the same state
-  // This prevents polling from destroying event listeners every cycle
+  // This prevents WebSocket messages from destroying event listeners unnecessarily
   if (currentState.lastWidgetState === state && currentState.widgetVisible) return;
 
   const widget = getOrCreateWidget();
@@ -428,9 +649,56 @@ function renderCompletedState(review) {
 }
 
 /**
+ * Format a raw error message into a clean, user-facing format.
+ *
+ * If the backend already formatted the message (starts with "Error"),
+ * it is used as-is. Otherwise, classify it client-side.
+ *
+ * @param {string} rawMsg - Raw error message
+ * @returns {string} Formatted error string like "Error 429: AI RESOURCE EXHAUSTED."
+ */
+function formatErrorMessage(rawMsg) {
+  if (!rawMsg) {
+    return "Error 500: INTERNAL SERVER ERROR. An unexpected error occurred.";
+  }
+
+  // If already formatted by the backend, use as-is
+  if (rawMsg.startsWith("Error ")) {
+    return rawMsg;
+  }
+
+  const msg = rawMsg.toLowerCase();
+
+  // AI / Gemini related errors
+  if (msg.includes("429") || msg.includes("resource_exhausted") || msg.includes("resource exhausted")) {
+    return "Error 429: AI RESOURCE EXHAUSTED. Please wait a moment and try again.";
+  } else if (msg.includes("quota") || msg.includes("rate limit") || msg.includes("rate_limit")) {
+    return "Error 429: AI RATE LIMIT EXCEEDED. Please try again later.";
+  } else if (msg.includes("gemini") || msg.includes("genai") || msg.includes("agent")) {
+    return "Error 500: AI ANALYSIS FAILED. The AI model returned an unexpected error.";
+  }
+
+  // GitHub related errors
+  else if (msg.includes("401") || msg.includes("unauthorized")) {
+    return "Error 401: GITHUB UNAUTHORIZED. Check your GitHub token configuration.";
+  } else if (msg.includes("403") || msg.includes("forbidden")) {
+    return "Error 403: GITHUB FORBIDDEN. Your token may lack the required permissions.";
+  } else if (msg.includes("github") || msg.includes("diff")) {
+    return "Error 502: GITHUB API ERROR. Failed to communicate with the GitHub API.";
+  }
+
+  // Fallback
+  else {
+    return "Error 500: INTERNAL SERVER ERROR. An unexpected error occurred.";
+  }
+}
+
+/**
  * Render the error state.
  */
 function renderErrorState(errorMsg) {
+  const formattedError = formatErrorMessage(errorMsg);
+
   return `
     <div class="mm-card mm-card--error">
       <div class="mm-header">
@@ -441,12 +709,13 @@ function renderErrorState(errorMsg) {
         <button class="mm-close" title="Close">✕</button>
       </div>
       <div class="mm-body">
-        <p class="mm-error-text">❌ Review failed</p>
-        <p class="mm-error-detail">${errorMsg || "An unexpected error occurred. Please try again."}</p>
+        <p class="mm-error-text">Review Failed ❌</p>
+        <p class="mm-error-detail">${formattedError}</p>
       </div>
     </div>
   `;
 }
+
 
 /**
  * Render the timeout state.
@@ -617,78 +886,29 @@ function attachCloseHandler(widget) {
 // Initialization
 // ══════════════════════════════════════════════════════════════════════
 
-let repoPollTimer = null;
-
-/**
- * Start periodically checking the backend for any new reviews for this repo.
- * This allows us to auto-detect git pushes while the user is looking at the page.
- */
-function startRepoPolling(repoFullName) {
-  stopRepoPolling();
-  repoPollTimer = setInterval(async () => {
-    // Only poll if we are not currently polling a pending/processing commit review
-    if (currentState.pollTimer) return;
-
-    const latestReview = await fetchLatestReview(repoFullName);
-    if (latestReview) {
-      // If we find a review that is newer/different from what we currently display
-      const isNewCommit = latestReview.commit_sha !== currentState.commitSha;
-      if (isNewCommit) {
-        currentState.repo = repoFullName;
-        currentState.commitSha = latestReview.commit_sha;
-        currentState.reviewData = latestReview;
-        // Reset manual close state so the new review is shown to the user!
-        currentState.widgetClosed = false;
-        currentState.lastWidgetState = null;
-
-        if (
-          latestReview.status === "pending" ||
-          latestReview.status === "processing"
-        ) {
-          startPolling(latestReview.commit_sha);
-        } else if (latestReview.status === "completed") {
-          showWidget("completed");
-        } else if (latestReview.status === "failed") {
-          showWidget("error", latestReview.error_message);
-        }
-      }
-    }
-  }, 5000); // Check every 5 seconds for fast response
-}
-
-/**
- * Stop the repository polling timer.
- */
-function stopRepoPolling() {
-  if (repoPollTimer) {
-    clearInterval(repoPollTimer);
-    repoPollTimer = null;
-  }
-}
-
 /**
  * Main initialization — runs when the content script is injected.
- * Detects GitHub context and starts polling if applicable.
+ * Detects GitHub context and opens WebSocket connections if applicable.
  */
 async function initialize() {
   const context = detectGitHubContext();
   if (!context) {
-    stopRepoPolling();
+    disconnectAllWebSockets();
     return;
   }
 
   currentState.repo = context.repo;
 
-  // Start polling the repo for any new pushes/reviews
-  startRepoPolling(context.repo);
+  // Start repo-level WebSocket for auto-detecting new pushes/reviews
+  connectRepoWebSocket(context.repo);
 
-  // If we're on a commit page, poll for that specific commit
+  // If we're on a commit page, also open a commit-level WebSocket
   if (context.commitSha) {
-    startPolling(context.commitSha);
+    connectCommitWebSocket(context.commitSha);
     return;
   }
 
-  // On repo pages, check for the latest review
+  // On repo pages, check for the latest review via HTTP (one-time fetch)
   const latestReview = await fetchLatestReview(context.repo);
   if (latestReview) {
     currentState.reviewData = latestReview;
@@ -698,8 +918,8 @@ async function initialize() {
       latestReview.status === "pending" ||
       latestReview.status === "processing"
     ) {
-      // Review is still in progress — start polling
-      startPolling(latestReview.commit_sha);
+      // Review is still in progress — open commit WebSocket for live updates
+      connectCommitWebSocket(latestReview.commit_sha);
     } else if (latestReview.status === "completed") {
       // Show the completed review
       showWidget("completed");
@@ -709,8 +929,7 @@ async function initialize() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PAGE_UPDATED") {
-    stopPolling();
-    stopRepoPolling();
+    disconnectAllWebSockets();
     currentState.widgetClosed = false;
     currentState.lastWidgetState = null;
     const widget = document.getElementById("mergemind-widget");

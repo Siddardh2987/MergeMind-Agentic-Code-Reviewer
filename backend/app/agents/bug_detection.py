@@ -44,7 +44,8 @@ Focus on these areas:
    - Integer overflow or underflow
    - Race conditions in async code
 
-3. **Runtime Errors** 💥
+3. **Syntax and Runtime Errors** 💥
+   - Syntax errors, parser errors, or compilation errors (e.g., missing parentheses in `print` statements in Python 3, syntax errors, mismatched brackets, undefined keywords)
    - Accessing properties on potentially null objects
    - Type mismatches or incorrect type assumptions
    - Missing error handling for operations that can fail
@@ -52,9 +53,9 @@ Focus on these areas:
    - Missing imports or undefined references
 
 Important guidelines:
-- Focus on bugs that are LIKELY to occur, not theoretical impossibilities
+- Focus on bugs that are LIKELY to occur, including syntax/compilation errors and logical flaws
 - Consider the data flow — what values could variables realistically hold?
 - Check for proper error handling around I/O, network, and database operations
-- Set severity to "critical" for bugs likely to cause crashes or data loss
+- Set severity to "critical" for syntax/compilation errors or bugs likely to cause crashes or data loss
 - Set severity to "warning" for bugs that cause incorrect behavior
 - Set severity to "info" for potential issues that are unlikely but worth noting"""

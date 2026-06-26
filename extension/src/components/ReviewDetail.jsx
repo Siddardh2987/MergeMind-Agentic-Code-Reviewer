@@ -159,7 +159,7 @@ function ReviewDetail({ commitSha, backendUrl, onBack }) {
         </div>
         <div className="detail-meta-row">
           <span className="detail-meta-label">Reviewed</span>
-          <span className="detail-meta-value">{new Date(review.created_at).toLocaleString()}</span>
+          <span className="detail-meta-value">{new Date(review.created_at.endsWith('Z') || review.created_at.includes('+') ? review.created_at : review.created_at + 'Z').toLocaleString()}</span>
         </div>
       </div>
 

@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db
-from app.routers import webhook, reviews
+from app.routers import webhook, reviews, ws
 from app.routers import settings as settings_router
 from app.schemas import HealthResponse
 
@@ -51,29 +51,30 @@ cors_origins = [
     if origin.strip()
 ]
 
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=cors_origins + [
-#         "https://github.com",
-#         "http://localhost:*",
-#     ],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"chrome-extension://.*",
+    allow_origins=cors_origins + [
+        "https://github.com",
+        "http://localhost:*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origin_regex=r"chrome-extension://.*",
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 # ── Include Routers ──────────────────────────────────────────────────
 # Mount the webhook and reviews routers
 app.include_router(webhook.router)
 app.include_router(reviews.router)
 app.include_router(settings_router.router)
+app.include_router(ws.router)
 
 
 # ── Startup Event ────────────────────────────────────────────────────

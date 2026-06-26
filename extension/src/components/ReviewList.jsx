@@ -24,7 +24,10 @@ function ReviewList({ reviews, isLoading, currentRepo, onSelectReview }) {
   }
 
   const getTimeAgo = (dateStr) => {
-    const date = new Date(dateStr);
+    // Backend stores UTC times, but SQLite's func.now() produces naive
+    // datetimes (no timezone suffix). Append 'Z' so JS Date parses as UTC.
+    const utcStr = dateStr.endsWith('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z';
+    const date = new Date(utcStr);
     const seconds = Math.floor((new Date() - date) / 1000);
     if (seconds < 60) return 'just now';
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;

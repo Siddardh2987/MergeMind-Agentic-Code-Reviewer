@@ -14,6 +14,13 @@ from datetime import datetime
 # Review-Related Schemas
 # ══════════════════════════════════════════════════════════════════════
 
+class ReviewRequest(BaseModel):
+    """Request schema for manually triggering a review."""
+    commit_sha: str = Field(..., min_length=40, max_length=40, description="Commit SHA to review")
+    repository: str = Field(..., description="Repository full name (e.g. owner/repo)")
+    github_username: Optional[str] = Field(default="unknown", description="GitHub username")
+
+
 class ReviewIssue(BaseModel):
     """
     A single issue found during code review.

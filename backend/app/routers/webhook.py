@@ -20,6 +20,7 @@ from app.models import Review
 from app.schemas import WebhookResponse
 from app.services.github_service import verify_webhook_signature
 from app.services.review_service import run_review_pipeline
+from app.services.ws_manager import manager as ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,24 @@ async def handle_webhook(request: Request, db: Session = Depends(get_db)):
     db.refresh(review)
 
     logger.info(f"📝 Created review record #{review.id} (status: pending)")
+
+    # ── Step 6b: Notify WebSocket subscribers of new review ───────────
+    payload = {
+        "id": review.id,
+        "github_username": review.github_username,
+        "github_user_id": github_user_id,
+        "repository": review.repository,
+        "commit_sha": review.commit_sha,
+        "status": review.status,
+        "summary": None,
+        "issues": [],
+        "error_message": None,
+        "displayed": review.displayed,
+        "created_at": review.created_at.isoformat() if review.created_at else None,
+        "completed_at": None,
+    }
+    await ws_manager.notify_commit(commit_sha, payload)
+    await ws_manager.notify_repo(repo_full_name, payload)
 
     # ── Step 7: Launch review pipeline in background ──────────────────
     # We create a new database session for the background task

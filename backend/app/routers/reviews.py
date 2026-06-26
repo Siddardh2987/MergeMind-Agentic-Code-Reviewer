@@ -11,16 +11,105 @@ review results on GitHub pages.
 
 import json
 import logging
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models import Review
-from app.schemas import ReviewResponse, ReviewListItem, ReviewSummary, ReviewIssue
+from app.schemas import ReviewResponse, ReviewListItem, ReviewSummary, ReviewIssue, ReviewRequest
+from app.services.review_service import run_review_pipeline
+from app.services.ws_manager import manager as ws_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["reviews"])
+
+
+async def _run_review_in_background(
+    review_id: int,
+    repo_full_name: str,
+    commit_sha: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        await run_review_pipeline(review_id, repo_full_name, commit_sha, db)
+    except Exception as e:
+        logger.exception(f"❌ Background review task failed: {str(e)}")
+    finally:
+        db.close()
+
+
+def _build_review_dict(review: Review) -> dict:
+    summary = None
+    if review.summary_json:
+        try:
+            summary = json.loads(review.summary_json)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    issues = []
+    if review.issues_json:
+        try:
+            issues = json.loads(review.issues_json)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    return {
+        "id": review.id,
+        "github_username": review.github_username,
+        "github_user_id": review.github_user_id,
+        "repository": review.repository,
+        "commit_sha": review.commit_sha,
+        "status": review.status,
+        "summary": summary,
+        "issues": issues,
+        "error_message": review.error_message,
+        "displayed": review.displayed,
+        "created_at": review.created_at.isoformat() if review.created_at else None,
+        "completed_at": review.completed_at.isoformat() if review.completed_at else None,
+    }
+
+
+@router.post("/review", response_model=ReviewResponse)
+async def request_review(
+    body: ReviewRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Manually request a review for a commit.
+    Creates a pending review record and launches the review pipeline in the background.
+    """
+    existing = db.query(Review).filter(Review.commit_sha == body.commit_sha).first()
+    if existing:
+        return _build_review_response(existing)
+
+    review = Review(
+        github_username=body.github_username,
+        github_user_id=None,
+        repository=body.repository,
+        commit_sha=body.commit_sha,
+        status="pending",
+    )
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+
+    logger.info(f"📝 Manually created review record #{review.id} (status: pending)")
+
+    # Notify commit WS client of pending review immediately
+    await ws_manager.notify_commit(body.commit_sha, _build_review_dict(review))
+
+    # Notify repo WS client
+    await ws_manager.notify_repo(body.repository, _build_review_dict(review))
+
+    # Run review in background
+    asyncio.create_task(
+        _run_review_in_background(review.id, body.repository, body.commit_sha)
+    )
+
+    return _build_review_response(review)
+
 
 
 @router.get("/review/{commit_sha}", response_model=ReviewResponse)
